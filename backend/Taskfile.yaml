@@ -1,0 +1,198 @@
+version: "3"
+
+vars:
+  MYAPP_DATABASE_DSN: '{{.MYAPP_DATABASE_DSN | default ""}}'
+
+tasks:
+  default:
+    cmds:
+      - task: help
+    silent: true
+
+  help:
+    desc: Display available tasks
+    cmds:
+      - task --list --sort none
+    silent: true
+
+  run-app:
+    desc: Run the APP Server
+    silent: true
+    cmds:
+      - echo 'Running the app server'
+      - go run ./cmd/app
+
+  run-worker:
+    desc: Run the Worker Server
+    silent: true
+    cmds:
+      - echo 'Running the worker server'
+      - go run ./cmd/worker
+
+  build-app:
+    desc: Build the APP binary
+    silent: true
+    cmds:
+      - echo 'Building APP binary'
+      - go build -o bin/app ./cmd/app
+
+  build-worker:
+    desc: Build the Worker binary
+    silent: true
+    cmds:
+      - echo 'Building Worker binary'
+      - go build -o bin/worker ./cmd/worker
+
+  build:
+    desc: Build both App and Worker binaries
+    silent: true
+    cmds:
+      - task: build-app
+      - task: build-worker
+      - echo 'All binaries built successfully'
+
+  test:
+    desc: Run all tests
+    silent: true
+    cmds:
+      - echo 'Running the tests'
+      - go test ./...
+
+  tidy:
+    desc: Format all .go files, and Tidy and verify Go module dependencies
+    silent: true
+    cmds:
+      - echo 'Formatting .go files'
+      - go fmt ./...
+      - echo 'Downloads missing dependencies and cleans up unused entries in go.mod and go.sum'
+      - go mod tidy
+      - echo 'Verifying dependencies'
+      - go mod verify
+
+  confirm:
+    desc: Confirm a potentially risky operation
+    internal: true
+    silent: true
+    cmds:
+      - |
+        printf 'Are you sure you want to continue? [y/N] '
+        read -r answer
+        case "$answer" in
+          y|Y) ;;
+          *) printf 'Cancelled.\n'; exit 1 ;;
+        esac
+
+  migrations:version:
+    desc: Check current database migration version
+    silent: true
+    cmds:
+      - go run -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest -path ./internal/infrastructure/database/postgres/migrations -database "{{.MYAPP_DATABASE_DSN}}" version
+
+  migrations:status:
+    desc: List all applied and pending migration files
+    silent: true
+    cmds:
+      - |
+        RAW_VER=$(go run -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest -path ./internal/infrastructure/database/postgres/migrations -database "{{.MYAPP_DATABASE_DSN}}" version 2>&1 || true)
+
+        if echo "$RAW_VER" | grep -q "no migration"; then
+          CUR=0
+        elif echo "$RAW_VER" | grep -q "dirty"; then
+          printf 'Warning: Database is in a DIRTY state (%s)\n' "$RAW_VER"
+          exit 1
+        elif echo "$RAW_VER" | grep -qE '^[0-9]+$'; then
+          CUR=$RAW_VER
+        else
+          printf 'Error checking migration version: %s\n' "$RAW_VER"
+          exit 1
+        fi
+
+        printf 'Current DB Version: %s\n\n' "$CUR"
+
+        for file in ./internal/infrastructure/database/postgres/migrations/*.up.sql; do
+          [ -e "$file" ] || continue
+          base=$(basename "$file")
+          seq=$(echo "$base" | cut -d'_' -f1 | sed 's/^0*//')
+          [ -z "$seq" ] && seq=0
+
+          if [ "$seq" -le "$CUR" ]; then
+            printf '[APPLIED] %s\n' "$base"
+          else
+            printf '[PENDING] %s\n' "$base"
+          fi
+        done
+
+  migrations:new:
+    desc: Create a new database migration file
+    silent: true
+    vars:
+      NAME: '{{.name | default ""}}'
+    cmds:
+      - |
+        if [ -z "{{.NAME}}" ]; then
+          printf 'Error: migration name is required.\n'
+          printf 'Usage: task migrations:new name=create_tasks_table\n'
+          exit 1
+        fi
+
+        # Restrict names to letters, numbers, and underscores.
+        case "{{.NAME}}" in
+          *[!a-zA-Z0-9_]*)
+            printf 'Error: use only letters, numbers, and underscores.\n'
+            exit 1
+            ;;
+        esac
+
+        printf 'Creating migration files for %s\n' "{{.NAME}}"
+        mkdir -p ./internal/infrastructure/database/postgres/migrations
+
+        # 1. Run golang-migrate to get the correct sequential number
+        go run -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest create -seq -ext sql -dir ./internal/infrastructure/database/postgres/migrations "{{.NAME}}"
+
+        # 2. Instantly delete the down migration file
+        rm -f ./internal/infrastructure/database/postgres/migrations/*_{{.NAME}}.down.sql
+
+        printf 'Done. Kept only the .up.sql file.\n'
+
+  migrations:up:
+    desc: Apply all pending up database migrations
+    silent: true
+    cmds:
+      - task: confirm
+      - echo 'Running up migrations against database'
+      - go run -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest -path ./internal/infrastructure/database/postgres/migrations -database "{{.MYAPP_DATABASE_DSN}}" up
+
+  migrations:down:
+    desc: Rollback the last migration
+    silent: true
+    cmds:
+      - task: confirm
+      - echo 'Rolling back last migration'
+      - go run -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest -path ./internal/infrastructure/database/postgres/migrations -database "{{.MYAPP_DATABASE_DSN}}" down 1
+
+  migrations:drop:
+    desc: Drop all tables, functions, and migration history in the database
+    silent: true
+    cmds:
+      - task: confirm
+      - echo 'Dropping all database objects and migration state'
+      - go run -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest -path ./internal/infrastructure/database/postgres/migrations -database "{{.MYAPP_DATABASE_DSN}}" drop -f
+      - echo 'Database wiped cleanly.'
+
+  migrations:reset:
+    desc: Wipe the database completely and re-run all up migrations from scratch
+    silent: true
+    cmds:
+      - task: confirm
+      - echo 'Resetting database and re-applying migrations'
+      - go run -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest -path ./internal/infrastructure/database/postgres/migrations -database "{{.MYAPP_DATABASE_DSN}}" drop -f
+      - go run -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest -path ./internal/infrastructure/database/postgres/migrations -database "{{.MYAPP_DATABASE_DSN}}" up
+      - echo 'Database reset complete.'
+
+  migrations:up-one:
+    desc: Apply only the next single pending migration
+    silent: true
+    cmds:
+      - task: confirm
+      - echo 'Applying next migration'
+      - go run -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest -path ./internal/infrastructure/database/postgres/migrations -database "{{.MYAPP_DATABASE_DSN}}" up 1
