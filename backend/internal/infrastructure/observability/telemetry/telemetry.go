@@ -37,8 +37,8 @@ type Telemetry struct {
 
 // Init initializes only the OTel components enabled in config.
 // this is just setup and tagged with global label i.e., service name, env, ...
-func Init(ctx context.Context, cfg config.OTelConfig) (*Telemetry, error) {
-	if !cfg.Enabled {
+func Init(ctx context.Context, config config.OTelConfig) (*Telemetry, error) {
+	if !config.Enabled {
 		log.Println("OpenTelemetry is disabled by configuration")
 		return &Telemetry{}, nil
 	}
@@ -48,8 +48,8 @@ func Init(ctx context.Context, cfg config.OTelConfig) (*Telemetry, error) {
 	// 1. build common Resource metadata (Service Name, Environment)
 	res, err := resource.New(ctx,
 		resource.WithAttributes(
-			semconv.ServiceNameKey.String(cfg.ServiceName),
-			semconv.DeploymentEnvironmentKey.String(cfg.Environment),
+			semconv.ServiceNameKey.String(config.ServiceName),
+			semconv.DeploymentEnvironmentKey.String(config.Environment),
 		),
 	)
 	if err != nil {
@@ -57,8 +57,8 @@ func Init(ctx context.Context, cfg config.OTelConfig) (*Telemetry, error) {
 	}
 
 	// 2. initialize Traces if enabled
-	if cfg.TracesEnabled {
-		tp, err := initTracerProvider(ctx, cfg, res)
+	if config.TracesEnabled {
+		tp, err := initTracerProvider(ctx, config, res)
 		if err != nil {
 			return nil, fmt.Errorf("failed to init tracer provider: %w", err)
 		}
@@ -67,8 +67,8 @@ func Init(ctx context.Context, cfg config.OTelConfig) (*Telemetry, error) {
 	}
 
 	// 3. initialize Metrics if enabled
-	if cfg.MetricsEnabled {
-		mp, err := initMeterProvider(ctx, cfg, res)
+	if config.MetricsEnabled {
+		mp, err := initMeterProvider(ctx, config, res)
 		if err != nil {
 			return nil, fmt.Errorf("failed to init meter provider: %w", err)
 		}
@@ -77,8 +77,8 @@ func Init(ctx context.Context, cfg config.OTelConfig) (*Telemetry, error) {
 	}
 
 	// 4. initialize Logs if enabled
-	if cfg.LogsEnabled {
-		lp, err := initLoggerProvider(ctx, cfg, res)
+	if config.LogsEnabled {
+		lp, err := initLoggerProvider(ctx, config, res)
 		if err != nil {
 			return nil, fmt.Errorf("failed to init logger provider: %w", err)
 		}
@@ -87,12 +87,12 @@ func Init(ctx context.Context, cfg config.OTelConfig) (*Telemetry, error) {
 	}
 
 	log.Printf("OpenTelemetry initialized successfully | service=%s endpoint=%s protocol=%s traces=%t metrics=%t logs=%t",
-		cfg.ServiceName,
-		cfg.Endpoint,
-		cfg.Protocol,
-		cfg.TracesEnabled,
-		cfg.MetricsEnabled,
-		cfg.LogsEnabled,
+		config.ServiceName,
+		config.Endpoint,
+		config.Protocol,
+		config.TracesEnabled,
+		config.MetricsEnabled,
+		config.LogsEnabled,
 	)
 
 	return t, nil
@@ -114,24 +114,24 @@ func cleanEndpoint(raw string) string {
 	return strings.TrimPrefix(endpoint, "https://")
 }
 
-func initTracerProvider(ctx context.Context, cfg config.OTelConfig, res *resource.Resource) (*sdktrace.TracerProvider, error) {
+func initTracerProvider(ctx context.Context, config config.OTelConfig, res *resource.Resource) (*sdktrace.TracerProvider, error) {
 	var exporter sdktrace.SpanExporter
 	var err error
-	endpoint := cleanEndpoint(cfg.Endpoint)
+	endpoint := cleanEndpoint(config.Endpoint)
 
-	switch strings.ToLower(cfg.Protocol) {
+	switch strings.ToLower(config.Protocol) {
 	case "grpc":
 		exporter, err = otlptracegrpc.New(ctx,
 			otlptracegrpc.WithEndpoint(endpoint),
-			otlptracegrpc.WithTimeout(cfg.ExportTimeout),
+			otlptracegrpc.WithTimeout(config.ExportTimeout),
 		)
 	case "http/protobuf", "http":
 		exporter, err = otlptracehttp.New(ctx,
 			otlptracehttp.WithEndpoint(endpoint),
-			otlptracehttp.WithTimeout(cfg.ExportTimeout),
+			otlptracehttp.WithTimeout(config.ExportTimeout),
 		)
 	default:
-		return nil, fmt.Errorf("unsupported protocol: %s", cfg.Protocol)
+		return nil, fmt.Errorf("unsupported protocol: %s", config.Protocol)
 	}
 
 	if err != nil {
@@ -139,11 +139,11 @@ func initTracerProvider(ctx context.Context, cfg config.OTelConfig, res *resourc
 	}
 
 	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(cfg.TracesSamplingRatio))),
+		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(config.TracesSamplingRatio))),
 		sdktrace.WithBatcher(exporter,
-			sdktrace.WithBatchTimeout(cfg.BatchTimeout),
-			sdktrace.WithMaxExportBatchSize(cfg.MaxExportBatchSize),
-			sdktrace.WithMaxQueueSize(cfg.MaxQueueSize),
+			sdktrace.WithBatchTimeout(config.BatchTimeout),
+			sdktrace.WithMaxExportBatchSize(config.MaxExportBatchSize),
+			sdktrace.WithMaxQueueSize(config.MaxQueueSize),
 		),
 		sdktrace.WithResource(res),
 	)
@@ -152,24 +152,24 @@ func initTracerProvider(ctx context.Context, cfg config.OTelConfig, res *resourc
 	return tp, nil
 }
 
-func initMeterProvider(ctx context.Context, cfg config.OTelConfig, res *resource.Resource) (*sdkmetric.MeterProvider, error) {
+func initMeterProvider(ctx context.Context, config config.OTelConfig, res *resource.Resource) (*sdkmetric.MeterProvider, error) {
 	var exporter sdkmetric.Exporter
 	var err error
-	endpoint := cleanEndpoint(cfg.Endpoint)
+	endpoint := cleanEndpoint(config.Endpoint)
 
-	switch strings.ToLower(cfg.Protocol) {
+	switch strings.ToLower(config.Protocol) {
 	case "grpc":
 		exporter, err = otlpmetricgrpc.New(ctx,
 			otlpmetricgrpc.WithEndpoint(endpoint),
-			otlpmetricgrpc.WithTimeout(cfg.ExportTimeout),
+			otlpmetricgrpc.WithTimeout(config.ExportTimeout),
 		)
 	case "http/protobuf", "http":
 		exporter, err = otlpmetrichttp.New(ctx,
 			otlpmetrichttp.WithEndpoint(endpoint),
-			otlpmetrichttp.WithTimeout(cfg.ExportTimeout),
+			otlpmetrichttp.WithTimeout(config.ExportTimeout),
 		)
 	default:
-		return nil, fmt.Errorf("unsupported protocol: %s", cfg.Protocol)
+		return nil, fmt.Errorf("unsupported protocol: %s", config.Protocol)
 	}
 
 	if err != nil {
@@ -178,25 +178,25 @@ func initMeterProvider(ctx context.Context, cfg config.OTelConfig, res *resource
 
 	mp := sdkmetric.NewMeterProvider(
 		sdkmetric.WithResource(res),
-		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(exporter, sdkmetric.WithInterval(cfg.BatchTimeout))),
+		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(exporter, sdkmetric.WithInterval(config.BatchTimeout))),
 	)
 
 	otel.SetMeterProvider(mp)
 	return mp, nil
 }
 
-func initLoggerProvider(ctx context.Context, cfg config.OTelConfig, res *resource.Resource) (*sdklog.LoggerProvider, error) {
+func initLoggerProvider(ctx context.Context, config config.OTelConfig, res *resource.Resource) (*sdklog.LoggerProvider, error) {
 	var exporter sdklog.Exporter
 	var err error
-	endpoint := cleanEndpoint(cfg.Endpoint)
+	endpoint := cleanEndpoint(config.Endpoint)
 
-	switch strings.ToLower(cfg.Protocol) {
+	switch strings.ToLower(config.Protocol) {
 	case "grpc":
 		exporter, err = otlploggrpc.New(ctx, otlploggrpc.WithEndpoint(endpoint))
 	case "http/protobuf", "http":
 		exporter, err = otlploghttp.New(ctx, otlploghttp.WithEndpoint(endpoint))
 	default:
-		return nil, fmt.Errorf("unsupported protocol: %s", cfg.Protocol)
+		return nil, fmt.Errorf("unsupported protocol: %s", config.Protocol)
 	}
 
 	if err != nil {

@@ -18,9 +18,9 @@ type InfoHandler struct {
 	SystemServer *server.System
 }
 
-func NewInfoHandler(sysSrv *server.System) *InfoHandler {
+func NewInfoHandler(systemServer *server.System) *InfoHandler {
 	return &InfoHandler{
-		SystemServer: sysSrv,
+		SystemServer: systemServer,
 	}
 }
 

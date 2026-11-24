@@ -15,18 +15,18 @@ type AsynqMonHandler struct {
 }
 
 // Asynq manages its own pool internally, so we just need the connection details
-func NewAsynqMonHandler(sysSrv *server.System) *AsynqMonHandler {
+func NewAsynqMonHandler(systemServer *server.System) *AsynqMonHandler {
 	hmon := asynqmon.New(asynqmon.Options{
 		RootPath: "/admin/asynqmon",
 		RedisConnOpt: asynq.RedisClientOpt{
-			Addr:     sysSrv.Config.RedisAsynq.Address,
-			Password: sysSrv.Config.RedisAsynq.Password,
-			DB:       sysSrv.Config.RedisAsynq.Database,
+			Addr:     systemServer.Config.RedisAsynq.Address,
+			Password: systemServer.Config.RedisAsynq.Password,
+			DB:       systemServer.Config.RedisAsynq.Database,
 		},
 	})
 
 	return &AsynqMonHandler{
-		SystemServer: sysSrv,
+		SystemServer: systemServer,
 		hmon:         hmon,
 	}
 }

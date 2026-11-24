@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/labstack/echo/v5"
 	echoMiddleware "github.com/labstack/echo/v5/middleware"
@@ -13,21 +14,17 @@ import (
 	"github.com/sharathm18/myapp/internal/server"
 )
 
-const (
-	UserIDKey   = "user_id"
-	UserRoleKey = "user_role"
-	LoggerKey   = "logger"
-)
+const LoggerKey = "logger"
 
 // RequestLoggerMiddleware builds the initial request-scoped logger with correlation IDs and HTTP request details,
 // wraps it in a new Go context, and updates *http.Request and *echo.Context to point to it
-func RequestLoggerMiddleware(appSrv *server.APP) echo.MiddlewareFunc {
+func RequestLoggerMiddleware(appServer *server.APP) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) error {
 			req := c.Request()
 
 			// build base request logger with metadata
-			logBuilder := appSrv.Logger.With().
+			logBuilder := appServer.Logger.With().
 				Str("method", c.Request().Method).
 				Str("path", c.Path()).
 				Str("ip", c.RealIP())
@@ -48,10 +45,21 @@ func RequestLoggerMiddleware(appSrv *server.APP) echo.MiddlewareFunc {
 	}
 }
 
+// EnhancedRequestLoggerMiddleware pulls the Zerolog instance created earlier by RequestLogger,
+// attaches authenticated user_id and user_role fields, and returns a new child context.
+func EnhancedRequestLoggerMiddleware(ctx context.Context, userID uuid.UUID, userRole string) context.Context {
+	enrichedLogger := GetLogger(ctx).With().
+		Str(UserIDKey, userID.String()).
+		Str(UserRoleKey, userRole).
+		Logger()
+
+	return context.WithValue(ctx, LoggerKey, &enrichedLogger)
+}
+
 // SummaryLoggerMiddleware measures total request latency, resolves the final HTTP status code,
 // and emits one canonical summary log entry (for both successes and errors) using the
 // pre-enriched Zerolog instance stored in go context
-func SummaryLoggerMiddleware(appSrv *server.APP) echo.MiddlewareFunc {
+func SummaryLoggerMiddleware(appServer *server.APP) echo.MiddlewareFunc {
 	return echoMiddleware.RequestLoggerWithConfig(echoMiddleware.RequestLoggerConfig{
 		LogURI:          true,
 		LogStatus:       true,
@@ -96,20 +104,16 @@ func SummaryLoggerMiddleware(appSrv *server.APP) echo.MiddlewareFunc {
 				event = logger.Info()
 			}
 
-			// append user_id if the Auth middleware stored it in go context during this request
-			if userID, ok := ctx.Value(UserIDKey).(string); ok && userID != "" {
-				event = event.Str("user_id", userID)
-			}
-
 			// Emit the single summary log line for the entire request lifecycle.
 			event.
+				Str("server", "app").
 				Dur("latency", v.Latency).
 				Int("status", statusCode).
 				Str("uri", v.URI).
 				Str("host", v.Host).
 				Int64("response_size", v.ResponseSize).
 				Str("user_agent", v.UserAgent).
-				Msg("API Request Processed")
+				Msg("api request processed")
 
 			// Return nil so Echo passes the original v.Error untouched to HTTPErrorHandler and Tracing
 			return nil

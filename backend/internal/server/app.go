@@ -9,35 +9,34 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/sharathm18/myapp/internal/config"
+	"github.com/sharathm18/myapp/internal/infrastructure/cache/redis"
 	"github.com/sharathm18/myapp/internal/infrastructure/database/postgres"
-	"github.com/sharathm18/myapp/internal/infrastructure/redis"
-	taskqueue "github.com/sharathm18/myapp/internal/infrastructure/task_queue"
+	"github.com/sharathm18/myapp/internal/infrastructure/taskqueue/asynq"
 )
 
-// central core dependency Injection container
+// Central core dependency Injection container
 type APP struct {
 	Config     *config.Config
 	Logger     *zerolog.Logger
 	Database   *postgres.Database
 	Redis      *redis.Client
 	HTTPServer *http.Server
-	TaskQueue  *taskqueue.ProducerClient
+	TaskQueue  *asynq.ProducerClient
 }
 
-func NewAPP(cfg *config.Config, logger *zerolog.Logger) (*APP, error) {
-
-	// initialize database
-	db, err := postgres.NewClient(cfg, logger)
+func NewAPP(config *config.Config, logger *zerolog.Logger) (*APP, error) {
+	// Initialize database
+	db, err := postgres.NewClient(config, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize database: %w", err)
 	}
 
-	// initialize redis client for cache
-	redis, err := redis.NewClient(cfg, logger)
+	// Initialize redis client for cache
+	redis, err := redis.NewClient(config, logger)
 	if err != nil {
 		var shutdownErrors []error
 
-		// should be in reverse order
+		// Should be in reverse order
 
 		if dbErr := db.Close(); dbErr != nil {
 			shutdownErrors = append(shutdownErrors, fmt.Errorf("database close error: %w", dbErr))
@@ -48,9 +47,9 @@ func NewAPP(cfg *config.Config, logger *zerolog.Logger) (*APP, error) {
 		return nil, errors.Join(shutdownErrors...)
 	}
 
-	// initialize background asynq client (producer)
-	// we only need the client to push tasks to redis. no worker is started here.
-	taskQueue, err := taskqueue.NewProducerClient(cfg, logger)
+	// Initialize background asynq client (Producer)
+	// We only need the client to push tasks to redis. no worker is started here.
+	taskQueue, err := asynq.NewProducerClient(config, logger)
 	if err != nil {
 		var shutdownErrors []error
 
@@ -71,7 +70,7 @@ func NewAPP(cfg *config.Config, logger *zerolog.Logger) (*APP, error) {
 
 	// Return the constructed server pointer
 	return &APP{
-		Config:    cfg,
+		Config:    config,
 		Logger:    logger,
 		Database:  db,
 		Redis:     redis,
@@ -79,7 +78,7 @@ func NewAPP(cfg *config.Config, logger *zerolog.Logger) (*APP, error) {
 	}, nil
 }
 
-// setup the HTTP Server
+// Setup the HTTP Server
 func (s *APP) SetupHTTPServer(handler http.Handler) {
 	s.HTTPServer = &http.Server{
 		Addr:         fmt.Sprintf(":%d", s.Config.AppServer.Port),
@@ -90,7 +89,7 @@ func (s *APP) SetupHTTPServer(handler http.Handler) {
 	}
 }
 
-// start HTTP server
+// Start HTTP server
 func (s *APP) Start() error {
 	s.Logger.Info().
 		Int("port", s.Config.AppServer.Port).
@@ -103,11 +102,11 @@ func (s *APP) Start() error {
 	return nil
 }
 
-// shutdown the HTTP Server, DB, Redis, TaskQueue
+// Shutdown the HTTP Server, DB, Redis, Taskqueue
 func (s *APP) Shutdown(ctx context.Context) error {
 	var shutdownErrors []error
 
-	// 1. stop taking new HTTP requests
+	// 1. Stop taking new HTTP requests
 	if s.HTTPServer != nil {
 		if err := s.HTTPServer.Shutdown(ctx); err != nil {
 			shutdownErrors = append(shutdownErrors, fmt.Errorf("app http server shutdown error: %w", err))
@@ -116,27 +115,27 @@ func (s *APP) Shutdown(ctx context.Context) error {
 		}
 	}
 
-	// 2. close TaskQueue Producer client
+	// 2. Close TaskQueue Producer client
 	if s.TaskQueue != nil {
 		if err := s.TaskQueue.Close(); err != nil {
 			shutdownErrors = append(shutdownErrors, fmt.Errorf("task queue close error: %w", err))
 		}
 	}
 
-	// 3. close Redis client connection
+	// 3. Close Redis client connection
 	if s.Redis != nil {
 		if err := s.Redis.Close(); err != nil {
 			shutdownErrors = append(shutdownErrors, fmt.Errorf("redis close error: %w", err))
 		}
 	}
 
-	// 4. close PostgreSQL connection pool
+	// 4. Close PostgreSQL connection pool
 	if s.Database != nil {
 		if err := s.Database.Close(); err != nil {
 			shutdownErrors = append(shutdownErrors, fmt.Errorf("database close error: %w", err))
 		}
 	}
 
-	// combine any errors that occurred during shutdown into a single error
+	// Combine any errors that occurred during shutdown into a single error
 	return errors.Join(shutdownErrors...)
 }

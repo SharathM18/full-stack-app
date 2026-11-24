@@ -23,20 +23,20 @@ const MigrationTimeout = 60 * time.Second
 var migrationFiles embed.FS
 
 // migrate automatically applies pending database schema updates using golang-migrate.
-func Migrate(ctx context.Context, logger *zerolog.Logger, cfg config.DatabaseConfig) error {
+func Migrate(ctx context.Context, logger *zerolog.Logger, config config.DatabaseConfig) error {
 	// 1. enforce a timeout budget so startup never hangs indefinitely
 	ctx, cancel := context.WithTimeout(ctx, MigrationTimeout)
 	defer cancel()
 
 	// 2. build standard PostgreSQL DSN
-	hostPort := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
-	encodedPassword := url.QueryEscape(cfg.Password)
+	hostPort := net.JoinHostPort(config.Host, strconv.Itoa(config.Port))
+	encodedPassword := url.QueryEscape(config.Password)
 	dsn := fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=%s",
-		cfg.User,
+		config.User,
 		encodedPassword,
 		hostPort,
-		cfg.Name,
-		cfg.SSLMode,
+		config.Name,
+		config.SSLMode,
 	)
 
 	// 3. wrap embedded migration files into an iofs source driver

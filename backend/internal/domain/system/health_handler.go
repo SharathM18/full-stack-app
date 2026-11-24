@@ -12,10 +12,10 @@ type HealthHandler struct {
 	AppServer    *server.APP
 }
 
-func NewHealthHandler(sysSrv *server.System, appSrv *server.APP) *HealthHandler {
+func NewHealthHandler(systemServer *server.System, appServer *server.APP) *HealthHandler {
 	return &HealthHandler{
-		SystemServer: sysSrv,
-		AppServer:    appSrv,
+		SystemServer: systemServer,
+		AppServer:    appServer,
 	}
 }
 

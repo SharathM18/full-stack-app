@@ -81,7 +81,14 @@ type WorkerConfig struct {
 }
 
 type AuthConfig struct {
-	SecretKey string `koanf:"secret_key" validate:"required,min=32"`
+	// app server
+	SecretKey       string        `koanf:"secret_key" validate:"required,min=32"`
+	AccessTokenTTL  time.Duration `koanf:"access_token_ttl" validate:"required,gt=0"`
+	RefreshTokenTTL time.Duration `koanf:"refresh_token_ttl" validate:"required,gt=0"`
+	BcryptCost      int           `koanf:"bcrypt_cost" validate:"required,min=10,max=14"`
+	// system server
+	SystemUsername string `koanf:"system_username" validate:"required"`
+	SystemPassword string `koanf:"system_password" validate:"required"`
 }
 
 // observability configs
@@ -123,18 +130,18 @@ type EmailIntegrationConfig struct {
 	EmailAPIKey string `koanf:"api_key" validate:"required"`
 }
 
-// loads the config from environment variables and an optional .env file
+// Loads the config from environment variables and an optional .env file
 func LoadConfig() (*Config, error) {
 	k := koanf.New(".")
 
-	// 1. if a local .env file exists, load its variables directly into the OS process environment
+	// 1. If a local .env file exists, load its variables directly into the OS process environment
 	if _, err := os.Stat(".env"); err == nil {
 		if err := godotenv.Load(".env"); err != nil {
 			return nil, fmt.Errorf("failed to load .env file into environment: %w", err)
 		}
 	}
 
-	// 2. load live OS environment variables
+	// 2. Load live OS environment variables
 	err := k.Load(env.Provider(".", env.Opt{
 		Prefix: "MYAPP_",
 		TransformFunc: func(k, v string) (string, any) {
@@ -149,7 +156,7 @@ func LoadConfig() (*Config, error) {
 
 	var cfg Config
 
-	// 3. define decode hooks using the maintained v2 mapstructure package
+	// 3. Define decode hooks using the maintained v2 mapstructure package
 	// environment variables are ALWAYS strings ("15s", "30")
 	// Go structs often need specific types like time.Duration
 	// this hook intercepts string values during unmarshaling and parses them into time.Duration.
@@ -157,7 +164,7 @@ func LoadConfig() (*Config, error) {
 		mapstructure.StringToTimeDurationHookFunc(),
 	)
 
-	// 4. unmarshal configuration with koanf.UnmarshalConf and custom DecoderConfig
+	// 4. Unmarshal configuration with koanf.UnmarshalConf and custom DecoderConfig
 	if err := k.UnmarshalWithConf("", &cfg, koanf.UnmarshalConf{
 		Tag: "koanf",
 		DecoderConfig: &mapstructure.DecoderConfig{
@@ -169,7 +176,7 @@ func LoadConfig() (*Config, error) {
 		return nil, fmt.Errorf("failed to unmarshal configuration: %w", err)
 	}
 
-	// 5. validate configuration using go-playground/validator
+	// 5. Validate configuration using go-playground/validator
 	// this checks all rules like validate:"required" or validate:"oneof=..."
 	// ensuring the app fails fast on startup if anything is missing or misconfigured.
 	validate := validator.New()
@@ -180,7 +187,7 @@ func LoadConfig() (*Config, error) {
 	return &cfg, nil
 }
 
-// config Utils functions
+// Config Utils functions
 
 func (cfg *ObservabilityConfig) IsProduction() bool {
 	return cfg.OTel.Environment == "production"

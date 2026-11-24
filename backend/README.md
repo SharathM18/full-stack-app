@@ -55,10 +55,9 @@ task: Available tasks for this project:
 | `go build -o bin/api cmd/api/main.go`         | Compiles your source code into a standalone executable binary saved at bin/api.                        |
 | `go clean -modcache`                          | Delete all Go modules downloaded on your entire machine                                                |
 
-pending
-err
-sqlerr
-validator
+## API Endpoints
+
+### System Server API Endpoints
 
 |                                                                           |                                                         |
 | ------------------------------------------------------------------------- | ------------------------------------------------------- |
@@ -69,59 +68,45 @@ validator
 | `curl -u admin:secret -s http://localhost:9090/admin/asynqmon/api/queues` | Asynq Dashboard (API Check)                             |
 | `curl -i -u admin:secret http://localhost:9090/admin/debug/pprof/`        | Go Profiler (pprof)                                     |
 
-## Notes
+### App Server API Endpoints
 
-- If struct is used/ passed to other package then use capitalise otherwise small case is better
-- Only one error and success log should be there in the entire business req. and also upload to otel
-  - Use `fmt.Errrof('Error is %w', err)
-- Go with an Aggregator Domain (Direct SQL Joins) when:
-  - It's a Bulk Read (List/Search/Export): Endpoints returning arrays of data (pagination, dashboards, search filters) that require columns from multiple domain tables.
-  - It's Strictly Read-Only: You just need to format and ship heavy data to the frontend as fast as possible.
-- Go with Interfaces (Service-to-Service) when:
-  - It's a Write (Mutation): Any action that creates, updates, or deletes data (e.g., adding a product and checking if a category exists).
-  - It's a Single-Record Check: Validating one ID, checking a permission, or enriching a single user's profile.
+|     |     |
+| --- | --- |
 
-API Endpoints
+## Docs
 
-2. create user
-3. update user
-4. delete user
-5. list user
+### Architecture: Pragmatic Modular Monolith
 
-6. create category
-7. update category
-8. delete category
-9. list category
+Today, domains (`user`, `auth`, `product`, etc.) live in isolated packages under `internal/domain/` and share a single PostgreSQL database:
 
-10. create product
-11. update product
-12. delete user
-13. list user with pagination and filters
-
-14. search products with filter of multiple domains fields
-
-# Go & Observability Engineering Notes
-
-## 1. Visibility & Error Handling
-
-- **Package Visibility:** Capitalize types/functions only when another package needs them; keep internal helpers lowercase. _(Exception: Struct fields used by `json`, `msgpack`, or `validator` must always be capitalized)._
-- **Wrap & Bubble Up:** Never log and return the same error. Wrap errors with lowercase context using `fmt.Errorf("action failed: %w", err)` and return them to the root caller.
-- **Single Canonical Log:** Emit **one** structured log (success or error) per business request/job at the root boundary (middleware/worker wrapper). Inner layers return `(data, nil)` silently.
-
-## 2. Modular Monolith Domain Boundaries
-
-- **Use Interfaces (Service-to-Service) when:**
-  - **Mutating data (Writes):** Creating, updating, or deleting across domains (e.g., `products` asking `categories` to `GetOrCreateByName`).
-  - **Single-record checks:** Validating a `user_id` or checking permissions. Define the interface in the _consumer_ domain.
-- **Use an Aggregator Domain (Direct SQLC `JOIN`s) when:**
+- **Strict Table Ownership:** Each domain only queries its own tables (`user` owns `users`; `auth` owns `user_sessions`).
+- **Consumer-Defined Interfaces:** Cross-domain calls go through interfaces defined by the caller (e.g., `UserRepository` inside `internal/domain/auth/service.go`).
+- **Zero Mapping Boilerplate:** While in a single repo, `auth` references `*user.UserModel` directly instead of maintaining duplicate adapter structs.
+- **Use an Aggregator Domain:** When
   - **Bulk Reads:** Paginated lists, search filters, dashboards, or exports spanning multiple tables.
   - **Strictly Read-Only:** Never perform `INSERT`, `UPDATE`, or `DELETE` inside an aggregator.
 
-## 3. OpenTelemetry (OTel) & Logging
+### Maintaining Error Consistency Across Layers
 
-1. **Correlate Logs & Traces:** Extract `trace_id` and `span_id` from `ctx` in the entry middleware and attach them to the request-scoped Zerolog logger.
-2. **Trace Propagation:** Use `tracer.Start(ctx, "span_name")` for in-process child spans. For async jobs (Asynq Producer -> Consumer), explicitly inject trace context into the task payload and extract it in the worker to link parent/child spans.
-3. **Record Span Errors Properly:** Whenever a span fails, call both:
-   - `span.RecordError(err)`
-   - `span.SetStatus(codes.Error, err.Error())`
-4. **Enrich Spans with Attributes:** Attach safe debugging metadata (e.g., `user.id`, `product.id`, `db.rows_affected`) via `span.SetAttributes(...)`—never log secrets or PII.
+| Layer                        | Pattern                             | Example                                                                               |
+| ---------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------- |
+| Repository                   | `"<domain> repo <method>: %w"`      | `fmt.Errorf("user repo get by email: %w", err)`                                       |
+| Service (4xx Business Error) | `echo.NewHTTPError(status, msg)`    | `echo.NewHTTPError(http.StatusConflict, "an account with this email already exists")` |
+| Service (5xx Internal Error) | `"<domain> service <method>: %w"`   | `fmt.Errorf("auth service hash password: %w", err)`                                   |
+| Handler                      | Return `err` directly (no wrapping) | return `err`                                                                          |
+
+### Logger Strategy: Summary Middleware
+
+- Do not put logger.Error() inside repositories, services, or handlers
+- Return err up to a single Request Summary Middleware (known as the Canonical Log Line or Wide Event pattern) is the cleanest production approach
+- Why One Summary Log Per Request Is Better? -> Zero duplicate noise, Complete context in one JSON object, Clean separation of severity
+
+### OpenTelemetry span.RecordError(err) & span.SetStatus(...)
+
+- do not write those two lines after every if err != nil in your repositories or services
+- Only use span.RecordError and span.SetStatus when you manually create a custom child span (ctx, span := tracer.Start(ctx, "send-otp-sms")) around a critical external dependency (like an SMS gateway or payment provider) that lacks automatic OTel instrumentation
+
+```
+span.RecordError(err)
+span.SetStatus(codes.Error, err.Error())
+```

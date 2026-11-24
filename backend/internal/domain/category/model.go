@@ -2,7 +2,8 @@ package category
 
 import (
 	"time"
-	"uuid"
+
+	"github.com/google/uuid"
 )
 
 type CategoryModel struct {

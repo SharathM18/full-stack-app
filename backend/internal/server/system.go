@@ -18,10 +18,10 @@ type System struct {
 	HTTPServer *http.Server
 }
 
-func NewSystem(cfg *config.Config, logger *zerolog.Logger) (*System, error) {
+func NewSystem(config *config.Config, logger *zerolog.Logger) (*System, error) {
 	// ...
 	return &System{
-		Config: cfg,
+		Config: config,
 		Logger: logger,
 	}, nil
 }
@@ -48,11 +48,10 @@ func (s *System) Start() error {
 	return nil
 }
 
-// shutdown gracefully stops the system server
+// Shutdown gracefully stops the system server
 func (s *System) Shutdown(ctx context.Context) error {
 	var shutdownErrors []error
 
-	// 1. stop taking new Management Server requests
 	if s.HTTPServer != nil {
 		if err := s.HTTPServer.Shutdown(ctx); err != nil {
 			shutdownErrors = append(shutdownErrors, fmt.Errorf("system http server shutdown error: %w", err))

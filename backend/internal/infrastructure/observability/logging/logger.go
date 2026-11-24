@@ -13,10 +13,10 @@ import (
 )
 
 // constructor and returning a pointer to zerolog.Logger for Dependency Injection
-func NewLogger(cfg *config.Config) *zerolog.Logger {
+func NewLogger(config *config.Config) *zerolog.Logger {
 
 	// 1. parse log level (debug, info, warn, error)
-	level, err := zerolog.ParseLevel(strings.ToLower(cfg.Observability.Logging.Level))
+	level, err := zerolog.ParseLevel(strings.ToLower(config.Observability.Logging.Level))
 	if err != nil {
 		level = zerolog.InfoLevel
 	}
@@ -25,7 +25,7 @@ func NewLogger(cfg *config.Config) *zerolog.Logger {
 	// console format for development/local, JSON format for production/staging (unless explicitly overridden)
 	// zerolog’s default behavior is raw, high-performance JSON.
 	var output io.Writer = os.Stdout
-	if cfg.Observability.Logging.Format == "console" && cfg.Primary.Env == "local" {
+	if config.Observability.Logging.Format == "console" && config.Primary.Env == "local" {
 		output = zerolog.ConsoleWriter{
 			Out:        os.Stdout,
 			TimeFormat: time.RFC3339,
@@ -36,23 +36,23 @@ func NewLogger(cfg *config.Config) *zerolog.Logger {
 	logger := zerolog.New(output).
 		Level(level).
 		With().
-		Str("env", cfg.Primary.Env).
-		Str("service", cfg.Primary.ServiceName).
+		Str("env", config.Primary.Env).
+		Str("service", config.Primary.ServiceName).
 		Timestamp().
 		Caller().
 		Logger()
 
 	// 4. attach OpenTelemetry Hook if OTel Logs are enabled via configuration
 	// This intercepts all logger calls and forwards them to the OTel LoggerProvider
-	// if cfg.Observability.OTel.Enabled && cfg.Observability.OTel.LogsEnabled {
-	// 	otelHook := otelzerolog.NewHook(cfg.Observability.OTel.ServiceName)
+	// if config.Observability.OTel.Enabled && config.Observability.OTel.LogsEnabled {
+	// 	otelHook := otelzerolog.NewHook(config.Observability.OTel.ServiceName)
 	// 	logger = logger.Hook(otelHook)
 	// }
 
 	logger.Info().
-		Str("level", cfg.Observability.Logging.Level).
-		Str("format", cfg.Observability.Logging.Format).
-		Bool("otel_logs_enabled", cfg.Observability.OTel.LogsEnabled).
+		Str("level", config.Observability.Logging.Level).
+		Str("format", config.Observability.Logging.Format).
+		Bool("otel_logs_enabled", config.Observability.OTel.LogsEnabled).
 		Msg("logger initialized successfully")
 
 	// return a pointer

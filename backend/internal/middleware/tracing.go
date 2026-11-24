@@ -1,20 +1,25 @@
 package middleware
 
 import (
+	"context"
+
+	"github.com/google/uuid"
 	echootel "github.com/labstack/echo-otel/v5"
 	"github.com/labstack/echo/v5"
 	"github.com/sharathm18/myapp/internal/server"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
-func SetupTracingMiddleware(appSrv *server.APP) echo.MiddlewareFunc {
-	// skip creating spans and allocating tracing memory when OTel is disabled in config.
-	if !appSrv.Config.Observability.OTel.Enabled || !appSrv.Config.Observability.OTel.TracesEnabled {
+func SetupTracingMiddleware(appServer *server.APP) echo.MiddlewareFunc {
+	// Skip creating spans and allocating tracing memory when OTel is disabled in config.
+	if !appServer.Config.Observability.OTel.Enabled || !appServer.Config.Observability.OTel.TracesEnabled {
 		return func(next echo.HandlerFunc) echo.HandlerFunc {
 			return next
 		}
 	}
 
-	// extract incoming traceparent headers or start a new root trace, inject the span
+	// Extract incoming traceparent headers or start a new root trace, inject the span
 	// into go context, and record HTTP metrics and span status on exit.
 	return echootel.NewMiddlewareWithConfig(echootel.Config{
 		// leave empty so echo-otel resolves server.address and server.port from Request.Host
@@ -28,48 +33,16 @@ func SetupTracingMiddleware(appSrv *server.APP) echo.MiddlewareFunc {
 	})
 }
 
-// EnhanceTracing by extracing span ID from Go context and attaches custom request metadata and errors to active OTel spans
-// func EnhanceTracing() echo.MiddlewareFunc {
-// 	return func(next echo.HandlerFunc) echo.HandlerFunc {
-// 		return func(c *echo.Context) error {
-// 			req := c.Request()
-// 			span := trace.SpanFromContext(req.Context())
+// EnhanceTracingMiddleware attaches authenticated user identity attributes to the active OTel span.
+// Called inside AuthenticateMiddleware right after JWT/JWKS verification succeeds.
+func EnhanceTracingMiddleware(ctx context.Context, userID uuid.UUID, userRole string) {
+	span := trace.SpanFromContext(ctx)
+	if !span.IsRecording() {
+		return
+	}
 
-// 			if span.IsRecording() {
-// 				span.SetAttributes(
-// 					attribute.String("http.real_ip", c.RealIP()),
-// 					// UserAgent is already captured by OTel middleware, so no need to duplicate
-// 				)
-
-// 				// Add User ID from echo context to otel span if present
-// 				if userID := c.Get("user_id"); userID != nil {
-// 					if userIDStr, ok := userID.(string); ok {
-// 						span.SetAttributes(attribute.String("user.id", userIDStr))
-// 					}
-// 				}
-
-// 				// Add User Role from echo context to otel span if present
-// 				if userRole := c.Get("user_role"); userRole != nil {
-// 					if userRoleStr, ok := userRole.(string); ok {
-// 						span.SetAttributes(attribute.String("user.role", userRoleStr))
-// 					}
-// 				}
-// 			}
-
-// 			// execute handler pipeline
-// 			err := next(c)
-
-// 			if span.IsRecording() {
-// 				// record error status and message if handler returned an error
-// 				if err != nil {
-// 					span.RecordError(err)
-// 					span.SetStatus(codes.Error, err.Error())
-// 				}
-
-// 				span.SetAttributes(attribute.Int("http.status_code", c.Response().Status))
-// 			}
-
-// 			return err
-// 		}
-// 	}
-// }
+	span.SetAttributes(
+		attribute.String(UserIDKey, userID.String()),
+		attribute.String(UserRoleKey, userRole),
+	)
+}

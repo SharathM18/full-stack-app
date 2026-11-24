@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/sharathm18/myapp/internal/config"
+	"github.com/sharathm18/myapp/internal/domain/auth"
 	"github.com/sharathm18/myapp/internal/domain/system"
+	"github.com/sharathm18/myapp/internal/domain/user"
 	"github.com/sharathm18/myapp/internal/infrastructure/database/postgres"
 	"github.com/sharathm18/myapp/internal/infrastructure/observability/logging"
 	"github.com/sharathm18/myapp/internal/infrastructure/observability/telemetry"
@@ -31,17 +33,17 @@ func main() {
 }
 
 func run() error {
-	// 1. load configuration using standard library log since zerolog isn't ready yet
-	cfg, err := config.LoadConfig()
+	// 1. Load configuration using standard library log since zerolog isn't ready yet
+	config, err := config.LoadConfig()
 	if err != nil {
 		log.Fatalf("initialization error: configuration failure -> %v", err)
 	}
 
-	// 2. initialize global OpenTelemetry Stack and uses standard library log since zerolog isn't ready yet
+	// 2. Initialize global OpenTelemetry Stack and uses standard library log since zerolog isn't ready yet
 	startupCtx, cancel := context.WithTimeout(context.Background(), StartupTimeout)
 	defer cancel()
 
-	tel, err := telemetry.Init(startupCtx, cfg.Observability.OTel)
+	tel, err := telemetry.Init(startupCtx, config.Observability.OTel)
 	if err != nil {
 		return fmt.Errorf("failed to initialize telemetry -> %v", err)
 	}
@@ -50,7 +52,7 @@ func run() error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
 		defer cancel()
 
-		// flush pending OTel trace and metric buffers LAST
+		// Flush pending OTel trace and metric buffers LAST
 		if err := tel.Shutdown(shutdownCtx); err != nil {
 			log.Printf("failed to flush telemetry data: %v", err)
 		} else {
@@ -58,19 +60,19 @@ func run() error {
 		}
 	}()
 
-	// 3. instantiate logger
-	logger := logging.NewLogger(cfg)
+	// 3. Instantiate logger
+	logger := logging.NewLogger(config)
 
-	// 4. run database migrations (skip on local if manual execution is preferred)
-	if cfg.Primary.Env != "local" {
-		if err := postgres.Migrate(context.Background(), logger, cfg.Database); err != nil {
+	// 4. Run database migrations (skip on local if manual execution is preferred)
+	if config.Primary.Env != "local" {
+		if err := postgres.Migrate(context.Background(), logger, config.Database); err != nil {
 			logger.Fatal().Err(err).Msg("failed to execute database migrations")
 		}
 	}
 
-	// 5. initialize dependency container
+	// 5. Initialize dependency container
 	// 5.1. app server
-	appSrv, err := server.NewAPP(cfg, logger)
+	appServer, err := server.NewAPP(config, logger)
 	if err != nil {
 		return fmt.Errorf("failed to initialize app server dependencies: %w", err)
 	}
@@ -81,13 +83,13 @@ func run() error {
 		defer cancel()
 
 		// stop http server -> taskQueue (producer) -> redis -> database
-		if err := appSrv.Shutdown(shutdownCtx); err != nil {
+		if err := appServer.Shutdown(shutdownCtx); err != nil {
 			logger.Error().Err(err).Msg("app server encountered errors during shutdown")
 		}
 	}()
 
 	// 5.2. system server
-	sysSrv, err := server.NewSystem(cfg, logger)
+	systemServer, err := server.NewSystem(config, logger)
 	if err != nil {
 		return fmt.Errorf("failed to initialize system server dependencies: %w", err)
 	}
@@ -97,59 +99,69 @@ func run() error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
 		defer cancel()
 
-		if err := sysSrv.Shutdown(shutdownCtx); err != nil {
+		if err := systemServer.Shutdown(shutdownCtx); err != nil {
 			logger.Error().Err(err).Msg("system server encountered errors during shutdown")
 		}
 	}()
 
-	// 6. build domain modules (repository -> service -> handler)
+	// 6. Build domain modules (repository -> service -> handler)
 	// 6.1. app domains
+	// user domain
+	userRepository := user.NewUserRepository(appServer)
+	userService := user.NewUserService(appServer, userRepository)
+	userHandler := user.NewUserHandler(appServer, userService)
 
-	// product domain
-	// productRepo := repository.NewRepository(appSrv)
-	// productService, err := service.NewService(appSrv, productRepo)
-	// productHandler := handler.NewHandler(appSrv, productService)
+	// auth domain
+	jwtVerifier := auth.NewJWTVerifier(appServer)
+
+	authRepository := auth.NewAuthRepository(appServer)
+	authService := auth.NewAuthService(appServer, authRepository, userRepository, jwtVerifier)
+	authHandler := auth.NewAuthHandler(appServer, authService)
 
 	// groups app domain handlers
-	appHandlers := router.AppHandlers{}
-
-	// 6.2. system domains
-	healthHandler := system.NewHealthHandler(sysSrv, appSrv)
-	asynqMonHandler := system.NewAsynqMonHandler(sysSrv)
-	infoHandler := system.NewInfoHandler(sysSrv)
-
-	// groups system domain handlers
-	sysHandlers := router.SystemHandlers{
-		Health:   healthHandler,
-		AsynqMon: asynqMonHandler,
-		Info:     infoHandler,
+	appHandlers := router.AppHandlers{
+		JWTVerifier: jwtVerifier,
+		UserHandler: userHandler,
+		AuthHandler: authHandler,
 	}
 
-	// 7. instantiate Servers & Attach Routers
+	// 6.2. system domains
+	healthHandler := system.NewHealthHandler(systemServer, appServer)
+	asynqMonHandler := system.NewAsynqMonHandler(systemServer)
+	infoHandler := system.NewInfoHandler(systemServer)
+
+	// groups system domain handlers
+	systemHandlers := router.SystemHandlers{
+		HealthHandler:   healthHandler,
+		AsynqMonHandler: asynqMonHandler,
+		InfoHandler:     infoHandler,
+	}
+
+	// 7. Instantiate Servers & Attach Routers
 	// 7.1. app server (:8080)
-	appRouter := router.NewAppRouter(appSrv, appHandlers)
-	appSrv.SetupHTTPServer(appRouter)
+	appRouter := router.NewAppRouter(appServer, appHandlers)
+	appServer.SetupHTTPServer(appRouter)
 
 	// 7.2. system server (:9090)
-	systemRouter := router.NewSystemRouter(sysSrv, sysHandlers)
-	sysSrv.SetupSystemServer(systemRouter)
+	systemRouter := router.NewSystemRouter(systemServer, systemHandlers)
+	systemServer.SetupSystemServer(systemRouter)
 
-	// 8. setup graceful shutdown listener (listens for Ctrl+C or Docker/K8s kill signals)
+	// 8. Setup graceful shutdown listener (listens for Ctrl+C or Docker/K8s kill signals)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// 9. start app http and system http servers in a goroutine
+	// 9. Start app http and system http servers in a goroutine
 	serverErrs := make(chan error, 2)
 
 	go func() {
-		serverErrs <- appSrv.Start()
+		serverErrs <- appServer.Start()
 	}()
 
 	go func() {
-		serverErrs <- sysSrv.Start()
+		serverErrs <- systemServer.Start()
 	}()
 
-	// 10. block main thread until an interrupt signal is received OR the server crashes
+	// 10. Block main thread until an interrupt signal is received OR the server crashes
 	select {
 	case <-ctx.Done():
 		logger.Info().Msg("shutdown signal received")

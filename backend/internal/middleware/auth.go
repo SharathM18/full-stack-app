@@ -1,40 +1,114 @@
 package middleware
 
-// type AuthMiddleware struct {
-// 	server *server.API
-// }
+import (
+	"context"
+	"net/http"
+	"strings"
 
-// func NewAuthMiddleware(s *server.API) *AuthMiddleware {
-// 	return &AuthMiddleware{server: s}
-// }
+	"github.com/google/uuid"
+	"github.com/labstack/echo/v5"
+)
 
-// // RequireAuthentication validates the JWT and injects user context
-// func (m *AuthMiddleware) RequireAuthentication() echo.MiddlewareFunc {
-// 	return func(next echo.HandlerFunc) echo.HandlerFunc {
-// 		return func(c *echo.Context) error {
-// 			authHeader := c.Request().Header.Get("Authorization")
-// 			if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
-// 				return echo.NewHTTPError(http.StatusUnauthorized, "Missing or invalid authorization header")
-// 			}
+const (
+	UserIDKey   = "user_id"
+	UserRoleKey = "user_role"
+)
 
-// 			tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+// AuthClaims holds the identity and authorization data extracted from a verified token.
+type AuthClaims struct {
+	UserID   uuid.UUID
+	UserRole string
+}
 
-// 			// TODO: Replace with actual JWT parsing and validation (e.g., using golang-jwt/jwt)
-// 			// claims, err := parseAndValidateJWT(tokenString, m.server.Config.JWTSecret)
-// 			if tokenString == "expired-token" {
-// 				return echo.NewHTTPError(http.StatusUnauthorized, "Token has expired")
-// 			}
+// TokenVerifier abstracts token validation so Authenticate works identically
+// whether tokens are issued by your own Auth service (HS256/EdDSA) or an external
+// identity provider like Clerk/Auth0 (RS256 via JWKS)
+type TokenVerifier interface {
+	VerifyToken(ctx context.Context, tokenString string) (*AuthClaims, error)
+}
 
-// 			// Mock data extracted from the validated JWT claims
-// 			userID := "usr_12345"
-// 			role := "admin"
+// Authenticate validates the Authorization Bearer token, injects user_id and user_role
+// into go innermost context, and enriches the request-scoped Zerolog logger and tracing
+func AuthenticateMiddleware(verifier TokenVerifier) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c *echo.Context) error {
+			req := c.Request()
+			ctx := req.Context()
 
-// 			// Store in Echo context.
-// 			// Your Enhancers and Handlers will read exactly these keys.
-// 			c.Set("user_id", userID)
-// 			c.Set("user_role", role)
+			// 1. Extract Bearer token from the Authorization header.
+			authHeader := req.Header.Get(echo.HeaderAuthorization)
+			if authHeader == "" {
+				return echo.NewHTTPError(http.StatusUnauthorized, "missing authorization header")
+			}
 
-// 			return next(c)
-// 		}
-// 	}
-// }
+			parts := strings.SplitN(authHeader, " ", 2)
+			if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || strings.TrimSpace(parts[1]) == "" {
+				return echo.NewHTTPError(http.StatusUnauthorized, "invalid authorization header format")
+			}
+
+			// 2. Verify token signature, expiry, and claims (Custom JWT or External JWKS)
+			claims, err := verifier.VerifyToken(ctx, strings.TrimSpace(parts[1]))
+			if err != nil {
+				return echo.NewHTTPError(http.StatusUnauthorized, "invalid or expired token")
+			}
+
+			// 3. Store identity values in go innermost context
+			ctx = context.WithValue(ctx, UserIDKey, claims.UserID)
+			ctx = context.WithValue(ctx, UserRoleKey, claims.UserRole)
+
+			// 4. Enrich the existing request logger with user_id and user_role
+			ctx = EnhancedRequestLoggerMiddleware(ctx, claims.UserID, claims.UserRole)
+
+			// 5. Enhanced trace by adding user_id and user_role
+			EnhanceTracingMiddleware(ctx, claims.UserID, claims.UserRole)
+
+			// 6. Point *http.Request and *echo.Context to the updated child context
+			c.SetRequest(req.WithContext(ctx))
+
+			return next(c)
+		}
+	}
+}
+
+// RequireRolesMiddleware enforces Role-Based Access Control (RBAC) on a route or route group
+// must be registered after Authenticate so user_role is present in context.Context
+func RequireRolesMiddleware(allowedRoles ...string) echo.MiddlewareFunc {
+	// pre-build a lookup map once at router startup for O(1) role checks per request
+	allowed := make(map[string]struct{}, len(allowedRoles))
+	for _, r := range allowedRoles {
+		allowed[r] = struct{}{}
+	}
+
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c *echo.Context) error {
+			userRole := GetUserRole(c.Request().Context())
+			if userRole == "" {
+				return echo.NewHTTPError(http.StatusUnauthorized, "authentication required")
+			}
+
+			if _, ok := allowed[userRole]; !ok {
+				return echo.NewHTTPError(http.StatusForbidden, "insufficient permissions")
+			}
+
+			return next(c)
+		}
+	}
+}
+
+// utils functions
+
+// GetUserID retrieves the authenticated user's ID from go context.
+func GetUserID(ctx context.Context) string {
+	if id, ok := ctx.Value(UserIDKey).(string); ok {
+		return id
+	}
+	return ""
+}
+
+// GetUserRole retrieves the authenticated user's userRole from go context
+func GetUserRole(ctx context.Context) string {
+	if userRole, ok := ctx.Value(UserRoleKey).(string); ok {
+		return userRole
+	}
+	return ""
+}

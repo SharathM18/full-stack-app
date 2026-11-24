@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/labstack/echo/v5"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -59,7 +60,7 @@ func HTTPErrorHandler(c *echo.Context, err error) {
 	var pgErr *pgconn.PgError
 
 	switch {
-	// 1. request payload/query validation failures -> 400 Bad Request with field breakdown
+	// 1. Request payload/query validation failures -> 400 Bad Request with field breakdown
 	case errors.As(err, &valErrs):
 		status = http.StatusBadRequest
 		fields := make(map[string]string, len(valErrs))
@@ -70,7 +71,7 @@ func HTTPErrorHandler(c *echo.Context, err error) {
 		detail.Message = "validation failed"
 		detail.Fields = fields
 
-	// 2. echo framework & middleware errors (e.g., 401, 403, 404 route not found, 413, 429)
+	// 2. Echo framework & middleware errors (e.g., 401, 403, 404 route not found, 413, 429)
 	case echo.StatusCode(err) != 0:
 		status = echo.StatusCode(err)
 		detail.Code = httpStatusToCode(status)
@@ -80,13 +81,13 @@ func HTTPErrorHandler(c *echo.Context, err error) {
 			detail.Message = err.Error()
 		}
 
-	// 3. empty postgreSQL query result -> 404 Not Found
+	// 3. Empty postgreSQL query result -> 404 Not Found
 	case errors.Is(err, pgx.ErrNoRows):
 		status = http.StatusNotFound
 		detail.Code = "NOT_FOUND"
 		detail.Message = "resource not found"
 
-	// 4. postgreSQL SQLSTATE constraint and data format errors
+	// 4. PostgreSQL SQLSTATE constraint and data format errors
 	case errors.As(err, &pgErr):
 		switch pgErr.Code {
 		case "23505": // unique_violation (e.g., duplicate email or SKU)
@@ -116,6 +117,14 @@ func HTTPErrorHandler(c *echo.Context, err error) {
 		// or third-party SDK error mappings (e.g., Redis, S3, payment gateway) here
 	}
 
+	// Mark the active OTel span as failed only for 5xx server errors
+	// 4xx client errors (validation, unauthorized, not found) are normal client outcomes
+	if status >= http.StatusInternalServerError {
+		if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+	}
 	_ = c.JSON(status, ErrorResponse{Error: detail})
 }
 

@@ -16,9 +16,9 @@ func SecurityHeadersMiddleware() echo.MiddlewareFunc {
 
 // CORS validates incoming browser origins, handles preflight OPTIONS requests,
 // and exposes X-Request-ID so frontend clients can read correlation IDs
-func CORSMiddleware(appSrv *server.APP) echo.MiddlewareFunc {
+func CORSMiddleware(appServer *server.APP) echo.MiddlewareFunc {
 	return echoMiddleware.CORSWithConfig(echoMiddleware.CORSConfig{
-		AllowOrigins: appSrv.Config.AppServer.CORSAllowedOrigins,
+		AllowOrigins: appServer.Config.AppServer.CORSAllowedOrigins,
 		AllowMethods: []string{
 			http.MethodGet,
 			http.MethodPost,
