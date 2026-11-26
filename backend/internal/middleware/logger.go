@@ -2,11 +2,9 @@ package middleware
 
 import (
 	"context"
-	"errors"
 	"net/http"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/labstack/echo/v5"
 	echoMiddleware "github.com/labstack/echo/v5/middleware"
 	"github.com/rs/zerolog"
@@ -14,7 +12,7 @@ import (
 	"github.com/sharathm18/myapp/internal/server"
 )
 
-const LoggerKey = "logger"
+type loggerCtxKey struct{}
 
 // RequestLoggerMiddleware builds the initial request-scoped logger with correlation IDs and HTTP request details,
 // wraps it in a new Go context, and updates *http.Request and *echo.Context to point to it
@@ -37,7 +35,7 @@ func RequestLoggerMiddleware(appServer *server.APP) echo.MiddlewareFunc {
 			contextLogger := logging.WithTraceContext(c.Request().Context(), logBuilder.Logger())
 
 			// wrap the logger in a new child context and re-attach it to *http.Request and *echo.Context
-			ctx := context.WithValue(req.Context(), LoggerKey, &contextLogger)
+			ctx := context.WithValue(req.Context(), loggerCtxKey{}, &contextLogger)
 			c.SetRequest(req.WithContext(ctx))
 
 			return next(c)
@@ -53,13 +51,13 @@ func EnhancedRequestLoggerMiddleware(ctx context.Context, userID uuid.UUID, user
 		Str(UserRoleKey, userRole).
 		Logger()
 
-	return context.WithValue(ctx, LoggerKey, &enrichedLogger)
+	return context.WithValue(ctx, loggerCtxKey{}, &enrichedLogger)
 }
 
 // SummaryLoggerMiddleware measures total request latency, resolves the final HTTP status code,
 // and emits one canonical summary log entry (for both successes and errors) using the
-// pre-enriched Zerolog instance stored in go context
-func SummaryLoggerMiddleware(appServer *server.APP) echo.MiddlewareFunc {
+// pre-enriched Zerolog instance stored in go context.
+func SummaryRequestLoggerMiddleware(appServer *server.APP) echo.MiddlewareFunc {
 	return echoMiddleware.RequestLoggerWithConfig(echoMiddleware.RequestLoggerConfig{
 		LogURI:          true,
 		LogStatus:       true,
@@ -68,39 +66,25 @@ func SummaryLoggerMiddleware(appServer *server.APP) echo.MiddlewareFunc {
 		LogUserAgent:    true,
 		LogResponseSize: true,
 
-		// executes once per request right after downstream middlewares and handlers finish
 		LogValuesFunc: func(c *echo.Context, v echoMiddleware.RequestLoggerValues) error {
 			ctx := c.Request().Context()
 			statusCode := v.Status
 
-			// resolve the actual HTTP status code when an error was returned, because Echo's
-			// global HTTPErrorHandler runs after this hook to write the JSON error response.
+			// Resolve the exact HTTP status code via the shared error translator so log
+			// severity (WRN vs ERR) always matches the JSON response sent by HTTPErrorHandler.
 			if v.Error != nil {
-				switch {
-				case echo.StatusCode(v.Error) != 0:
-					statusCode = echo.StatusCode(v.Error)
-				case errors.Is(v.Error, pgx.ErrNoRows):
-					statusCode = http.StatusNotFound
-				default:
-					statusCode = http.StatusInternalServerError
-				}
+				statusCode, _ = resolveError(ctx, v.Error)
 			}
 
-			// fetch the request-scoped logger created earlier by RequestLogger
-			// (already contains method, path, ip, request_id, trace_id, and span_id).
 			logger := GetLogger(ctx)
 
-			// select log severity based on the final resolved HTTP status code.
 			var event *zerolog.Event
 			switch {
 			case statusCode >= http.StatusInternalServerError:
-				// record 5xx server failures as Error along with the full %w error chain.
 				event = logger.Error().Err(v.Error)
 			case statusCode >= http.StatusBadRequest:
-				// record 4xx client, validation, or auth failures as Warn
 				event = logger.Warn().Err(v.Error)
 			default:
-				// record 2xx/3xx successful requests as Info.
 				event = logger.Info()
 			}
 
@@ -115,7 +99,6 @@ func SummaryLoggerMiddleware(appServer *server.APP) echo.MiddlewareFunc {
 				Str("user_agent", v.UserAgent).
 				Msg("api request processed")
 
-			// Return nil so Echo passes the original v.Error untouched to HTTPErrorHandler and Tracing
 			return nil
 		},
 	})
@@ -124,7 +107,7 @@ func SummaryLoggerMiddleware(appServer *server.APP) echo.MiddlewareFunc {
 // Utils functions
 
 func GetLogger(ctx context.Context) *zerolog.Logger {
-	if logger, ok := ctx.Value(LoggerKey).(*zerolog.Logger); ok && logger != nil {
+	if logger, ok := ctx.Value(loggerCtxKey{}).(*zerolog.Logger); ok && logger != nil {
 		return logger
 	}
 	logger := zerolog.Nop()

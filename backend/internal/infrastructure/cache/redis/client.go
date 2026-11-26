@@ -47,12 +47,12 @@ func NewClient(config *config.Config, logger *zerolog.Logger) (*Client, error) {
 	defer cancel()
 
 	if err := redisClient.Ping(ctx).Err(); err != nil {
-		return nil, fmt.Errorf("failed to connect to Redis: %w", err)
+		return nil, fmt.Errorf("failed to connect to redis: %w", err)
 	}
 
 	logger.Info().Str("address", config.RedisCache.Address).
 		Int("DB", config.RedisCache.Database).
-		Msg("successfully connected to Redis")
+		Msg("successfully connected to redis")
 
 	return &Client{
 		Client: redisClient,

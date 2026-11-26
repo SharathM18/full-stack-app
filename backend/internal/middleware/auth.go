@@ -10,8 +10,15 @@ import (
 )
 
 const (
+	// Exported string names for Zerolog fields and OpenTelemetry span attributes
 	UserIDKey   = "user_id"
 	UserRoleKey = "user_role"
+)
+
+// Unexported struct types used strictly as context.WithValue keys
+type (
+	userIDCtxKey   struct{}
+	userRoleCtxKey struct{}
 )
 
 // AuthClaims holds the identity and authorization data extracted from a verified token.
@@ -53,8 +60,8 @@ func AuthenticateMiddleware(verifier TokenVerifier) echo.MiddlewareFunc {
 			}
 
 			// 3. Store identity values in go innermost context
-			ctx = context.WithValue(ctx, UserIDKey, claims.UserID)
-			ctx = context.WithValue(ctx, UserRoleKey, claims.UserRole)
+			ctx = context.WithValue(ctx, userIDCtxKey{}, claims.UserID)
+			ctx = context.WithValue(ctx, userRoleCtxKey{}, claims.UserRole)
 
 			// 4. Enrich the existing request logger with user_id and user_role
 			ctx = EnhancedRequestLoggerMiddleware(ctx, claims.UserID, claims.UserRole)
@@ -97,17 +104,15 @@ func RequireRolesMiddleware(allowedRoles ...string) echo.MiddlewareFunc {
 
 // utils functions
 
-// GetUserID retrieves the authenticated user's ID from go context.
-func GetUserID(ctx context.Context) string {
-	if id, ok := ctx.Value(UserIDKey).(string); ok {
-		return id
-	}
-	return ""
+// GetUserID retrieves the authenticated user's UUID from go context.
+func GetUserID(ctx context.Context) (uuid.UUID, bool) {
+	id, ok := ctx.Value(userIDCtxKey{}).(uuid.UUID)
+	return id, ok
 }
 
-// GetUserRole retrieves the authenticated user's userRole from go context
+// GetUserRole retrieves the authenticated user's userRole from go context.
 func GetUserRole(ctx context.Context) string {
-	if userRole, ok := ctx.Value(UserRoleKey).(string); ok {
+	if userRole, ok := ctx.Value(userRoleCtxKey{}).(string); ok {
 		return userRole
 	}
 	return ""

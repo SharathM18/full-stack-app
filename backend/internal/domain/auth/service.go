@@ -8,16 +8,17 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/labstack/echo/v5"
+	"github.com/sharathm18/myapp/internal/domain/shared/apperror"
 	"github.com/sharathm18/myapp/internal/domain/shared/utils"
 	"github.com/sharathm18/myapp/internal/domain/user"
+	"github.com/sharathm18/myapp/internal/middleware"
 	"github.com/sharathm18/myapp/internal/server"
+	emailTask "github.com/sharathm18/myapp/internal/worker/email"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -58,7 +59,7 @@ func (s *AuthService) Signup(ctx context.Context, req SignupRequest, userAgent, 
 	_, err := s.UserRepository.GetByEmail(ctx, email)
 	if err == nil {
 		_ = bcrypt.CompareHashAndPassword(dummyBcryptHash, []byte(req.Password))
-		return nil, "", echo.NewHTTPError(http.StatusConflict, "an account with this email already exists")
+		return nil, "", apperror.Conflict("EMAIL_ALREADY_EXISTS", "an account with this email already exists")
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return nil, "", fmt.Errorf("auth service signup: %w", err)
@@ -70,7 +71,7 @@ func (s *AuthService) Signup(ctx context.Context, req SignupRequest, userAgent, 
 		return nil, "", fmt.Errorf("auth service signup: %w", err)
 	}
 
-	// atomically create user + initial device session
+	// Atomically create user + initial device session
 	var (
 		createdUser     *user.UserModel
 		rawRefreshToken string
@@ -79,22 +80,31 @@ func (s *AuthService) Signup(ctx context.Context, req SignupRequest, userAgent, 
 	err = s.AppServer.Database.RunInTx(ctx, func(txCtx context.Context) error {
 		var txErr error
 
-		// query 1: runs on the locked transaction connection
 		createdUser, txErr = s.UserRepository.CreatePasswordUser(txCtx, name, email, string(hashedBytes))
 		if txErr != nil {
-			return fmt.Errorf("auth service signup: %w", txErr)
+			return txErr
 		}
 
-		// query 2: runs on the EXACT SAME locked transaction connection
 		rawRefreshToken, txErr = s.CreateSession(txCtx, createdUser.ID, userAgent, ipAddress)
 		if txErr != nil {
-			return fmt.Errorf("auth service signup: %w", txErr)
+			return txErr
 		}
 
-		return nil // returning nil triggers COMMIT on that connection
+		return nil
 	})
 	if err != nil {
 		return nil, "", fmt.Errorf("auth service signup: %w", err)
+	}
+
+	// Send a email notification
+	task, err := emailTask.NewWelcomeEmailTask(ctx, emailTask.WelcomeEmailPayload{
+		To:   email,
+		Name: name,
+	})
+	if err != nil {
+		middleware.GetLogger(ctx).Warn().Err(err).Msg("failed to build welcome email task")
+	} else if _, err := s.AppServer.TaskQueue.EnqueueTask(ctx, task); err != nil {
+		middleware.GetLogger(ctx).Warn().Err(err).Msg("failed to enqueue welcome email")
 	}
 
 	return s.buildAuthResponse(createdUser, rawRefreshToken)
@@ -109,23 +119,23 @@ func (s *AuthService) Login(ctx context.Context, req LoginRequest, userAgent, ip
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			_ = bcrypt.CompareHashAndPassword(dummyBcryptHash, []byte(req.Password))
-			return nil, "", echo.NewHTTPError(http.StatusUnauthorized, "invalid email or password")
+			return nil, "", apperror.Unauthorized("invalid email or password")
 		}
 		return nil, "", fmt.Errorf("auth service login: %w", err)
 	}
 
 	// check account eligibility
 	if !existingUser.IsActive {
-		return nil, "", echo.NewHTTPError(http.StatusForbidden, "your account has been deactivated")
+		return nil, "", apperror.Forbidden("your account has been deactivated")
 	}
 	if existingUser.PasswordHash == nil {
 		_ = bcrypt.CompareHashAndPassword(dummyBcryptHash, []byte(req.Password))
-		return nil, "", echo.NewHTTPError(http.StatusUnauthorized, "invalid email or password")
+		return nil, "", apperror.Unauthorized("invalid email or password")
 	}
 
 	// verify password hash
 	if err := bcrypt.CompareHashAndPassword([]byte(*existingUser.PasswordHash), []byte(req.Password)); err != nil {
-		return nil, "", echo.NewHTTPError(http.StatusUnauthorized, "invalid email or password")
+		return nil, "", apperror.Unauthorized("invalid email or password")
 	}
 
 	// create new device session and mint Access JWT

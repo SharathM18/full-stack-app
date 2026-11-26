@@ -81,11 +81,12 @@ func NewAPP(config *config.Config, logger *zerolog.Logger) (*APP, error) {
 // Setup the HTTP Server
 func (s *APP) SetupHTTPServer(handler http.Handler) {
 	s.HTTPServer = &http.Server{
-		Addr:         fmt.Sprintf(":%d", s.Config.AppServer.Port),
-		Handler:      handler,
-		ReadTimeout:  time.Duration(s.Config.AppServer.ReadTimeout) * time.Second,
-		WriteTimeout: time.Duration(s.Config.AppServer.WriteTimeout) * time.Second,
-		IdleTimeout:  time.Duration(s.Config.AppServer.IdleTimeout) * time.Second,
+		Addr:              fmt.Sprintf(":%d", s.Config.AppServer.Port),
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       time.Duration(s.Config.AppServer.ReadTimeout) * time.Second,
+		WriteTimeout:      time.Duration(s.Config.AppServer.WriteTimeout) * time.Second,
+		IdleTimeout:       time.Duration(s.Config.AppServer.IdleTimeout) * time.Second,
 	}
 }
 

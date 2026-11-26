@@ -47,11 +47,7 @@ func NewSystemRouter(systemServer *server.System, h SystemHandlers) *echo.Echo {
 			LogValuesFunc: func(c *echo.Context, v echoMiddleware.RequestLoggerValues) error {
 				statusCode := v.Status
 				if v.Error != nil {
-					if code := echo.StatusCode(v.Error); code != 0 {
-						statusCode = code
-					} else {
-						statusCode = http.StatusInternalServerError
-					}
+					statusCode = mw.ResolveHTTPStatus(c.Request().Context(), v.Error)
 				}
 
 				var event *zerolog.Event
@@ -71,6 +67,7 @@ func NewSystemRouter(systemServer *server.System, h SystemHandlers) *echo.Echo {
 					Int("status", statusCode).
 					Dur("latency", v.Latency).
 					Msg("system request processed")
+
 				return nil
 			},
 		}),
@@ -89,9 +86,9 @@ func NewSystemRouter(systemServer *server.System, h SystemHandlers) *echo.Echo {
 			return false, nil
 		}
 
-		userMatch := subtle.ConstantTimeCompare([]byte(username), []byte(expectedUser)) == 1
-		passMatch := subtle.ConstantTimeCompare([]byte(password), []byte(expectedPass)) == 1
-		return userMatch && passMatch, nil
+		userMatch := subtle.ConstantTimeCompare([]byte(username), []byte(expectedUser))
+		passMatch := subtle.ConstantTimeCompare([]byte(password), []byte(expectedPass))
+		return (userMatch & passMatch) == 1, nil
 	}))
 
 	// Prometheus Scraper

@@ -18,7 +18,8 @@ func SecurityHeadersMiddleware() echo.MiddlewareFunc {
 // and exposes X-Request-ID so frontend clients can read correlation IDs
 func CORSMiddleware(appServer *server.APP) echo.MiddlewareFunc {
 	return echoMiddleware.CORSWithConfig(echoMiddleware.CORSConfig{
-		AllowOrigins: appServer.Config.AppServer.CORSAllowedOrigins,
+		AllowOrigins:     appServer.Config.AppServer.CORSAllowedOrigins,
+		AllowCredentials: true,
 		AllowMethods: []string{
 			http.MethodGet,
 			http.MethodPost,

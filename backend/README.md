@@ -88,23 +88,30 @@ Today, domains (`user`, `auth`, `product`, etc.) live in isolated packages under
 
 ### Maintaining Error Consistency Across Layers
 
-| Layer                        | Pattern                             | Example                                                                               |
-| ---------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------- |
-| Repository                   | `"<domain> repo <method>: %w"`      | `fmt.Errorf("user repo get by email: %w", err)`                                       |
-| Service (4xx Business Error) | `echo.NewHTTPError(status, msg)`    | `echo.NewHTTPError(http.StatusConflict, "an account with this email already exists")` |
-| Service (5xx Internal Error) | `"<domain> service <method>: %w"`   | `fmt.Errorf("auth service hash password: %w", err)`                                   |
-| Handler                      | Return `err` directly (no wrapping) | return `err`                                                                          |
+| Layer                        | Pattern                                            | Example                                                                                 |
+| ---------------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Handler (Input)              | `validator.BindAndValidate[T](c) / ParseUUIDParam` | `req, err := validator.BindAndValidate[SignupRequest](c)`                               |
+| Handler (Return)             | Return `err` directly (no wrapping)                | `return err`                                                                            |
+| Service (4xx Business Error) | `apperror.<Constructor>(...)`                      | `return apperror.Conflict("EMAIL_EXISTS", "an account with this email already exists")` |
+| Service (5xx Internal Error) | `fmt.Errorf("<domain> service <method>: %w", err)` | `return fmt.Errorf("auth service hash password: %w", err)`                              |
+| Repository                   | `fmt.Errorf("<domain> repo <method>: %w", err)`    | `return fmt.Errorf("user repo get by email: %w", err)`                                  |
+
+Note:
+
+- Need a custom business error in a new domain: You usually don't even need to edit apperror—just call a`pperror.BadRequest("INVALID_COUPON", "...")` or `apperror.Conflict("OUT_OF_STOCK", "...")` directly in your service. Only open `internal/domain/shared/apperror/error.go` if you need a new HTTP status constructor (like TooManyRequests or PaymentRequired).
+- Need to map a new PostgreSQL SQLSTATE or third-party SDK error (Redis, S3, Razorpay/Stripe): Open `internal/middleware/error.go` and add one case inside resolveError(). Both HTTPErrorHandler and SummaryLoggerMiddleware use resolveError(), so the JSON response and log severity (WRN vs ERR) update together automatically.
+- Need a custom validation message for a new struct tag: Open `internal/domain/shared/validator/validator.go` and add a case inside FormatFieldError().
 
 ### Logger Strategy: Summary Middleware
 
-- Do not put logger.Error() inside repositories, services, or handlers
-- Return err up to a single Request Summary Middleware (known as the Canonical Log Line or Wide Event pattern) is the cleanest production approach
-- Why One Summary Log Per Request Is Better? -> Zero duplicate noise, Complete context in one JSON object, Clean separation of severity
+- Do not put logger.Error() inside repositories, services, or handlers.
+- Return err to a `SummaryRequestLoggerMiddleware` (known as the Canonical Log Line or Wide Event pattern) is the cleanest production approach
+  - Why One Summary Log Per Request Is Better? -> Zero duplicate noise, Complete context in one JSON object, Clean separation of severity
 
 ### OpenTelemetry span.RecordError(err) & span.SetStatus(...)
 
-- do not write those two lines after every if err != nil in your repositories or services
-- Only use span.RecordError and span.SetStatus when you manually create a custom child span (ctx, span := tracer.Start(ctx, "send-otp-sms")) around a critical external dependency (like an SMS gateway or payment provider) that lacks automatic OTel instrumentation
+- Do not write those two lines after every if err != nil in your repositories or services
+- Only use `span.RecordError` and `span.SetStatus` when you manually create a custom child span (ctx, span := tracer.Start(ctx, "send-otp-sms")) around a critical external dependency (like an SMS gateway or payment provider) that lacks automatic OTel instrumentation
 
 ```
 span.RecordError(err)

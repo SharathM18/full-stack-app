@@ -36,6 +36,7 @@ func NewConsumerClient(config *config.Config, logger *zerolog.Logger) (*Consumer
 		redisOpt,
 		asynq.Config{
 			Concurrency: config.Worker.Concurrency, // Number of concurrent goroutines workers/ consumer across all tasks
+			Logger:      NewAsynqLogger(logger),
 			Queues: map[string]int{
 				"critical": 6, // 60% of worker time (e.g., OTPs)
 				"default":  3, // 30% of worker time (e.g., welcome emails)

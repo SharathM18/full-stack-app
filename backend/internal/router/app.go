@@ -46,7 +46,7 @@ func NewAppRouter(appServer *server.APP, h AppHandlers) *echo.Echo {
 		mw.RequestLoggerMiddleware(appServer),
 
 		// emits one canonical summary log entry (for both successes and errors) when the request finishes using pre-enriched zerolog instance
-		mw.SummaryLoggerMiddleware(appServer),
+		mw.SummaryRequestLoggerMiddleware(appServer),
 
 		// add security headers (X-Frame-Options, X-Content-Type-Options, HSTS) to responses
 		mw.SecurityHeadersMiddleware(),
@@ -61,6 +61,7 @@ func NewAppRouter(appServer *server.APP, h AppHandlers) *echo.Echo {
 		mw.RateLimitMiddleware(20, 40),
 	)
 	v1 := appRouter.Group("/api/v1")
+	// v1.Use(mw.MaintenanceMiddleware(true, "system is under scheduled maintenance"))
 
 	// Public routes: No token required
 	//  auth routes
@@ -69,6 +70,7 @@ func NewAppRouter(appServer *server.APP, h AppHandlers) *echo.Echo {
 	authGroup.POST("/login", h.AuthHandler.Login)
 	// authGroup.POST("/google", h.Auth.GoogleLogin)
 	// authGroup.POST("/otp/send", h.Auth.SendOTP)
+	// authGroup.POST("/otp/send", h.AuthHandler.SendOTP, mw.MaintenanceMiddleware(true, "OTP service is temporarily unavailable"))
 	// authGroup.POST("/otp/verify", h.Auth.VerifyOTP)
 	// authGroup.POST("/refresh", h.Auth.Refresh)
 	// authGroup.POST("/logout", h.Auth.Logout)

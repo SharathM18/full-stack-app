@@ -33,14 +33,14 @@ CREATE TABLE user_sessions (
     ip_address         VARCHAR(45),                 -- Client IPv4/IPv6 for security audit
     expires_at         TIMESTAMPTZ NOT NULL,
     revoked_at         TIMESTAMPTZ,                 -- NULL = active session; set on token rotation or logout
-    last_used_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_used_at       TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- index
+-- indexes
 CREATE INDEX idx_user_sessions_user_id ON user_sessions(user_id);
 CREATE INDEX idx_user_sessions_active  ON user_sessions(user_id) WHERE revoked_at IS NULL;
 
 -- triggers
-CREATE TRIGGER set_timestamp_user_sessions BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+CREATE TRIGGER set_timestamp_user_sessions BEFORE UPDATE ON user_sessions FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();

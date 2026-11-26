@@ -3,6 +3,7 @@ package email
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/hibiken/asynq"
 	"github.com/vmihailenco/msgpack/v5"
@@ -40,6 +41,7 @@ func NewWelcomeEmailTask(ctx context.Context, taskPayload WelcomeEmailPayload) (
 		TypeWelcomeEmail,
 		payload,
 		headers,
-		asynq.MaxRetry(3), // 1 initial attempt + 3 retries = 4 total attempts before DLQ
+		asynq.MaxRetry(3),             // 1 initial attempt + 3 retries = 4 total attempts before DLQ
+		asynq.Timeout(30*time.Second), // Asynq defaults to a 30-minute (1800s) execution timeout per task if none is specified
 	), nil
 }

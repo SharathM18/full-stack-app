@@ -6,6 +6,7 @@ import (
 
 	"github.com/labstack/echo/v5"
 	"github.com/sharathm18/myapp/internal/domain/shared/response"
+	"github.com/sharathm18/myapp/internal/domain/shared/validator"
 	"github.com/sharathm18/myapp/internal/server"
 )
 
@@ -23,11 +24,8 @@ func NewAuthHandler(appServer *server.APP, authSvc *AuthService) *AuthHandler {
 // main handler functions
 
 func (h *AuthHandler) Signup(c *echo.Context) error {
-	var req SignupRequest
-	if err := c.Bind(&req); err != nil {
-		return err
-	}
-	if err := c.Validate(&req); err != nil {
+	req, err := validator.BindAndValidate[SignupRequest](c)
+	if err != nil {
 		return err
 	}
 
@@ -48,11 +46,8 @@ func (h *AuthHandler) Signup(c *echo.Context) error {
 }
 
 func (h *AuthHandler) Login(c *echo.Context) error {
-	var req LoginRequest
-	if err := c.Bind(&req); err != nil {
-		return err
-	}
-	if err := c.Validate(&req); err != nil {
+	req, err := validator.BindAndValidate[LoginRequest](c)
+	if err != nil {
 		return err
 	}
 
@@ -77,7 +72,7 @@ func (h *AuthHandler) Login(c *echo.Context) error {
 func (h *AuthHandler) setRefreshCookie(c *echo.Context, token string) {
 	ttl := h.AppServer.Config.Auth.RefreshTokenTTL
 	c.SetCookie(&http.Cookie{
-		Name:     "refresh_token",
+		Name:     refreshCookieName,
 		Value:    token,
 		Path:     "/api/v1/auth",
 		Expires:  time.Now().Add(ttl),

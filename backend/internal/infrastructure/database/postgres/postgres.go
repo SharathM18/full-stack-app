@@ -98,7 +98,7 @@ func NewClient(config *config.Config, logger *zerolog.Logger) (*Database, error)
 	logger.Info().
 		Str("host", config.Database.Host).
 		Str("database", config.Database.Name).
-		Msg("successfully connected to PostgreSQL database")
+		Msg("successfully connected to postgreSQL database")
 
 	return &Database{
 		Pool:   pool,
